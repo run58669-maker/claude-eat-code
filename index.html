@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小克吃代码 - Claude Code Adventure</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0a0a0a;display:flex;justify-content:center;align-items:center;min-height:100vh;overflow:hidden;font-family:monospace;}
+  canvas{image-rendering:pixelated;image-rendering:crisp-edges;border:2px solid #333;cursor:none;}
+  #ui{position:fixed;top:10px;left:50%;transform:translateX(-50%);color:#7acad6;font-family:'Courier New',monospace;font-size:14px;text-align:center;pointer-events:none;z-index:10;text-shadow:0 0 10px rgba(122,202,214,0.5);}
+  #mode{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);color:#666;font-size:12px;font-family:monospace;pointer-events:none;z-index:10;}
+</style>
+</head>
+<body>
+<div id="ui">WASD/方向键移动 · 空格切换自动/手动 · 小克吃代码！</div>
+<div id="mode">手动模式</div>
+<canvas id="c"></canvas>
+<script>
+// ============ SETUP ============
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const modeEl = document.getElementById('mode');
+
+const SCREEN_W = 800, SCREEN_H = 600;
+canvas.width = SCREEN_W;
+canvas.height = SCREEN_H;
+
+// Map is larger than screen - based on the Claude Code screenshot layout
+const MAP_W = 1600, MAP_H = 1200;
+
+// ============ 8-BIT MUSIC ============
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let musicStarted = false;
+
+function create8BitOsc(freq, type, gain, startTime, duration) {
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  g.gain.value = gain;
+  osc.connect(g);
+  g.connect(audioCtx.destination);
+  osc.start(startTime);
+  osc.stop(startTime + duration);
+}
+
+// Simple looping 8-bit melody
+let musicLoop;
+function playNote(freq, type, vol, start, dur, vibrato) {
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  
+  // Vibrato for warmth
+  if (vibrato) {
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+    lfo.frequency.value = 5;
+    lfoGain.gain.value = freq * 0.01;
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+    lfo.start(start);
+    lfo.stop(start + dur);
+  }
+  
+  // Envelope: quick attack, sustain, release
+  g.gain.setValueAtTime(0, start);
+  g.gain.linearRampToValueAtTime(vol, start + 0.02);
+  g.gain.setValueAtTime(vol * 0.8, start + dur * 0.5);
+  g.gain.exponentialRampToValueAtTime(0.001, start + dur);
+  
+  osc.connect(g);
+  g.connect(audioCtx.destination);
+  osc.start(start);
+  osc.stop(start + dur + 0.01);
+}
+
+function startMusic() {
+  if (musicStarted) return;
+  musicStarted = true;
+  
+  const playSection = () => {
+    const now = audioCtx.currentTime;
+    const bpm = 110;
+    const b = 60 / bpm; // beat duration
+    const h = b / 2;    // half beat
+    
+    // === MELODY (square wave, cute & bouncy) ===
+    // Two 8-bar phrases, Stardew Valley / Undertale inspired
+    // Key of C major, using pentatonic + passing tones
+    const mel = [
+      // Phrase 1: ascending hopeful
+      [523, h], [587, h], [659, b], [587, h], [523, h],  // C5 D5 E5 D5 C5
+      [659, h], [698, h], [784, b+h], [0, h],            // E5 F5 G5 rest
+      [784, h], [698, h], [659, b], [523, h], [587, h],  // G5 F5 E5 C5 D5
+      [523, b+b], [0, b],                                  // C5 hold, rest
+      
+      // Phrase 2: playful variation
+      [659, h], [784, h], [880, b], [784, h], [659, h],  // E5 G5 A5 G5 E5
+      [784, h], [659, h], [587, b+h], [0, h],            // G5 E5 D5 rest
+      [523, h], [587, h], [659, h], [698, h], [784, b],  // C5 D5 E5 F5 G5
+      [880, h], [784, h], [659, b], [0, b],              // A5 G5 E5 rest
+      
+      // Phrase 3: gentle descent
+      [880, b], [784, h], [659, h], [784, b], [0, b],    // A5 G5 E5 G5
+      [659, h], [587, h], [523, b], [587, h], [659, h],  // E5 D5 C5 D5 E5
+      [523, b+b+b], [0, b],                               // C5 long hold, rest
+    ];
+    
+    let t = 0;
+    mel.forEach(([freq, dur]) => {
+      if (freq > 0) playNote(freq, 'square', 0.035, now + t, dur * 0.9, false);
+      t += dur;
+    });
+    const totalMelTime = t;
+    
+    // === HARMONY (triangle wave, soft chords) ===
+    const harm = [
+      // Follows melody with thirds/fifths below
+      [392, h], [440, h], [523, b], [440, h], [392, h],
+      [523, h], [523, h], [587, b+h], [0, h],
+      [587, h], [523, h], [523, b], [392, h], [440, h],
+      [392, b+b], [0, b],
+      
+      [523, h], [587, h], [659, b], [587, h], [523, h],
+      [587, h], [523, h], [440, b+h], [0, h],
+      [392, h], [440, h], [523, h], [523, h], [587, b],
+      [659, h], [587, h], [523, b], [0, b],
+      
+      [659, b], [587, h], [523, h], [587, b], [0, b],
+      [523, h], [440, h], [392, b], [440, h], [523, h],
+      [392, b+b+b], [0, b],
+    ];
+    
+    t = 0;
+    harm.forEach(([freq, dur]) => {
+      if (freq > 0) playNote(freq, 'triangle', 0.03, now + t, dur * 0.85, true);
+      t += dur;
+    });
+    
+    // === BASS (triangle wave, root notes) ===
+    const bassNotes = [
+      [131, b*2], [131, b*2], [175, b*2], [175, b*2],   // C3, C3, F3, F3
+      [196, b*2], [175, b*2], [131, b*2], [131, b*2],   // G3, F3, C3, C3
+      [165, b*2], [196, b*2], [220, b*2], [196, b*2],   // E3, G3, A3, G3
+      [175, b*2], [165, b*2], [131, b*4],                // F3, E3, C3 long
+      [131, b*2], [175, b*2], [196, b*4],                // C3, F3, G3
+      [131, b*4], [131, b*4],                             // C3 long
+    ];
+    
+    t = 0;
+    bassNotes.forEach(([freq, dur]) => {
+      if (freq > 0) playNote(freq, 'triangle', 0.05, now + t, dur * 0.85, false);
+      t += dur;
+    });
+    
+    // === PERCUSSION (noise-like) ===
+    const totalBeats = Math.floor(totalMelTime / h);
+    for (let i = 0; i < totalBeats; i++) {
+      const time = now + i * h;
+      const isBeat = i % 4 === 0;
+      const isOffbeat = i % 4 === 2;
+      
+      if (isBeat) {
+        // Kick-like
+        const kick = audioCtx.createOscillator();
+        const kg = audioCtx.createGain();
+        kick.type = 'sine';
+        kick.frequency.setValueAtTime(150, time);
+        kick.frequency.exponentialRampToValueAtTime(40, time + 0.1);
+        kg.gain.setValueAtTime(0.06, time);
+        kg.gain.exponentialRampToValueAtTime(0.001, time + 0.12);
+        kick.connect(kg); kg.connect(audioCtx.destination);
+        kick.start(time); kick.stop(time + 0.12);
+      }
+      
+      if (isOffbeat || isBeat) {
+        // Soft hi-hat
+        const hh = audioCtx.createOscillator();
+        const hg = audioCtx.createGain();
+        hh.type = 'square';
+        hh.frequency.value = 1200 + Math.random() * 400;
+        hg.gain.setValueAtTime(isBeat ? 0.012 : 0.007, time);
+        hg.gain.exponentialRampToValueAtTime(0.001, time + 0.04);
+        hh.connect(hg); hg.connect(audioCtx.destination);
+        hh.start(time); hh.stop(time + 0.04);
+      }
+    }
+    
+    // Loop
+    musicLoop = setTimeout(playSection, totalMelTime * 1000);
+  };
+  
+  playSection();
+}
+
+// Eat sound effect
+function playEatSound() {
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(400, now);
+  osc.frequency.exponentialRampToValueAtTime(800, now + 0.1);
+  g.gain.setValueAtTime(0.08, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+  osc.connect(g); g.connect(audioCtx.destination);
+  osc.start(now); osc.stop(now + 0.15);
+}
+
+// Burp sound
+function playBurpSound() {
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(150, now);
+  osc.frequency.exponentialRampToValueAtTime(60, now + 0.3);
+  g.gain.setValueAtTime(0.06, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+  osc.connect(g); g.connect(audioCtx.destination);
+  osc.start(now); osc.stop(now + 0.3);
+}
+
+// ============ CLAUDE CODE BACKGROUND ELEMENTS ============
+// These represent the text/elements from the screenshot, placed on the large map
+
+const bgElements = [
+  // Top bar
+  { x: 20, y: 15, text: "Claude Code", color: "#e74c3c", size: 18, font: "bold" },
+  { x: 200, y: 15, text: "v2.1.76", color: "#888888", size: 14 },
+  { x: 20, y: 45, text: "3. ○ Low", color: "#888888", size: 13 },
+  
+  // Welcome box 1 (blue border drawn separately)
+  { x: 80, y: 90, text: "Welcome back run!", color: "#ffffff", size: 16, font: "bold" },
+  { x: 80, y: 170, text: "Opus 4.6 (1M context) · Claude Max ·", color: "#888888", size: 11 },
+  { x: 80, y: 188, text: "run58669@gmail.com's Organization", color: "#888888", size: 11 },
+  { x: 80, y: 206, text: "~/Desktop", color: "#888888", size: 11 },
+  
+  // Tips box (right side of welcome)
+  { x: 520, y: 75, text: "Tips for getting started", color: "#4ade80", size: 14, font: "bold" },
+  { x: 520, y: 95, text: "Run /init to create a CLAUDE.md file", color: "#ffffff", size: 12 },
+  { x: 520, y: 115, text: "with instructions for Claude", color: "#ffffff", size: 12 },
+  { x: 520, y: 145, text: "Recent activity", color: "#4ade80", size: 14 },
+  { x: 520, y: 165, text: "No recent activity", color: "#888888", size: 12 },
+  
+  // Opus notice
+  { x: 20, y: 260, text: "↑ Opus now defaults to 1M context · 5x more room, same pricing", color: "#888888", size: 13 },
+  
+  // Prompt
+  { x: 20, y: 300, text: "> _", color: "#ffffff", size: 16 },
+  { x: 20, y: 340, text: "? for shortcuts", color: "#666666", size: 12 },
+  { x: 600, y: 340, text: "○ medium · /effort", color: "#666666", size: 12 },
+  
+  // Welcome box 2 (repeated in screenshot)
+  { x: 80, y: 400, text: "Welcome back run!", color: "#ffffff", size: 16, font: "bold" },
+  { x: 80, y: 480, text: "Opus 4.6 (1M context) · Claude Max ·", color: "#888888", size: 11 },
+  { x: 80, y: 498, text: "run58669@gmail.com's Organization", color: "#888888", size: 11 },
+  { x: 80, y: 516, text: "~/Desktop", color: "#888888", size: 11 },
+  
+  // Second tips
+  { x: 520, y: 390, text: "Tips for getting started", color: "#4ade80", size: 14, font: "bold" },
+  { x: 520, y: 410, text: "Run /init to create a CLAUDE.md file", color: "#ffffff", size: 12 },
+  { x: 520, y: 430, text: "with instructions for Cla...", color: "#ffffff", size: 12 },
+  { x: 520, y: 460, text: "Recent activity", color: "#4ade80", size: 14 },
+  { x: 520, y: 480, text: "No recent activity", color: "#888888", size: 12 },
+  
+  // Second opus notice
+  { x: 20, y: 570, text: "↑ Opus now defaults to 1M context · 5x more room, same pricing", color: "#888888", size: 13 },
+  
+  // User input (highlighted)
+  { x: 20, y: 620, text: "写一段Python生日代码，给朋友Claude，祝他3月生日快乐，加上小螃蟹元素", color: "#ffffff", size: 13, bg: "#333333" },
+  
+  // Code output
+  { x: 20, y: 670, text: "Create file", color: "#e87a3a", size: 15, font: "bold" },
+  { x: 20, y: 695, text: "happy_birthday_claude.py", color: "#aaaaaa", size: 13 },
+  
+  // Python code
+  { x: 20, y: 740, text: "import", color: "#c678dd", size: 14 },
+  { x: 90, y: 740, text: "time", color: "#e5c07b", size: 14 },
+  { x: 20, y: 765, text: "import", color: "#c678dd", size: 14 },
+  { x: 90, y: 765, text: "os", color: "#e5c07b", size: 14 },
+  { x: 20, y: 800, text: "def", color: "#c678dd", size: 14 },
+  { x: 60, y: 800, text: "animate_crabs():", color: "#61afef", size: 14 },
+  { x: 40, y: 825, text: '"""小螃蟹走路动画"""', color: "#98c379", size: 13 },
+  { x: 40, y: 855, text: "frames = [", color: "#abb2bf", size: 14 },
+  { x: 60, y: 880, text: '"  🦀  🦀  🦀  ",', color: "#98c379", size: 13 },
+  { x: 60, y: 905, text: '" 🦀  🦀  🦀   ",', color: "#98c379", size: 13 },
+  { x: 40, y: 935, text: "]", color: "#abb2bf", size: 14 },
+  { x: 40, y: 965, text: "for", color: "#c678dd", size: 14 },
+  { x: 75, y: 965, text: "_ in range(3):", color: "#abb2bf", size: 14 },
+  { x: 60, y: 990, text: "for", color: "#c678dd", size: 14 },
+  { x: 95, y: 990, text: "frame in frames:", color: "#abb2bf", size: 14 },
+  { x: 80, y: 1015, text: 'print(f"\\r{frame}", end="")', color: "#abb2bf", size: 13 },
+  { x: 80, y: 1040, text: "time.sleep(0.2)", color: "#abb2bf", size: 13 },
+  { x: 20, y: 1075, text: "def", color: "#c678dd", size: 14 },
+  { x: 60, y: 1075, text: "typing_effect(text, delay=0.03):", color: "#61afef", size: 14 },
+  { x: 40, y: 1100, text: '"""打字机效果"""', color: "#98c379", size: 13 },
+  { x: 40, y: 1125, text: "for", color: "#c678dd", size: 14 },
+  { x: 75, y: 1125, text: "char in text:", color: "#abb2bf", size: 14 },
+  { x: 60, y: 1150, text: "print(char, end='', flush=True)", color: "#abb2bf", size: 13 },
+];
+
+// ============ EDIBLE CODE ITEMS ============
+// These are the colorful text pieces that can be eaten
+let edibles = [];
+function initEdibles() {
+  edibles = bgElements.filter(e => 
+    e.color !== '#888888' && e.color !== '#666666' && e.color !== '#aaaaaa' && e.color !== '#abb2bf'
+  ).map(e => ({
+    ...e,
+    eaten: false,
+    width: e.text.length * (e.size * 0.6),
+    height: e.size + 4
+  }));
+  
+  // Add extra floating code snippets that respawn
+  const extraCodes = [
+    "const AI = 'Claude';", "function think() {}", "return wisdom;",
+    "while(true) { learn(); }", "console.log('hello');", "npm install magic",
+    "git commit -m '✨'", "async function dream()", "export default Claude",
+    "if (hungry) eat(code);", "let love = Infinity;", "class Bot extends AI {}",
+    "try { code() } catch(e) {}", "Promise.resolve('done')", "const MAX = 5;",
+    "import Claude from 'anthropic'", "yield* thoughts();", "new Claude()",
+  ];
+  const codeColors = ['#c678dd', '#61afef', '#e5c07b', '#98c379', '#e87a3a', '#4ade80', '#e74c3c'];
+  
+  for (let i = 0; i < 30; i++) {
+    edibles.push({
+      x: 50 + Math.random() * (MAP_W - 100),
+      y: 50 + Math.random() * (MAP_H - 100),
+      text: extraCodes[i % extraCodes.length],
+      color: codeColors[i % codeColors.length],
+      size: 12 + Math.floor(Math.random() * 4),
+      eaten: false,
+      width: extraCodes[i % extraCodes.length].length * 8,
+      height: 18,
+      floating: true,
+      floatPhase: Math.random() * Math.PI * 2,
+      respawn: true,
+    });
+  }
+}
+initEdibles();
+
+// ============ PARTICLES ============
+let particles = [];
+function spawnBurpParticles(x, y, text, color) {
+  const chars = text.split('');
+  for (let i = 0; i < Math.min(chars.length, 8); i++) {
+    particles.push({
+      x: x + Math.random() * 20 - 10,
+      y: y - 10,
+      vx: (Math.random() - 0.5) * 3,
+      vy: -1 - Math.random() * 2,
+      char: chars[Math.floor(Math.random() * chars.length)],
+      color: color,
+      life: 60 + Math.random() * 30,
+      maxLife: 90,
+      size: 8 + Math.random() * 6,
+    });
+  }
+}
+
+// ============ PLAYER (小克) ============
+// Spawn position: where the mascot icon is in the welcome box
+const player = {
+  x: 180, y: 130,  // mascot position in first welcome box
+  speed: 3,
+  dir: 0, // 0=down, 1=left, 2=right, 3=up
+  frame: 0,
+  eating: 0,
+  burping: 0,
+  eatCount: 0,
+  scale: 1.0,  // grows as you eat!
+  auto: false,
+  autoTarget: null,
+  autoTimer: 0,
+};
+
+// ============ CAMERA ============
+const camera = { x: 0, y: 0 };
+function updateCamera() {
+  const targetX = player.x - SCREEN_W / 2;
+  const targetY = player.y - SCREEN_H / 2;
+  camera.x += (targetX - camera.x) * 0.08;
+  camera.y += (targetY - camera.y) * 0.08;
+  camera.x = Math.max(0, Math.min(MAP_W - SCREEN_W, camera.x));
+  camera.y = Math.max(0, Math.min(MAP_H - SCREEN_H, camera.y));
+}
+
+// ============ INPUT ============
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === ' ') {
+    player.auto = !player.auto;
+    modeEl.textContent = player.auto ? '自动模式 (空格切换)' : '手动模式 (空格切换)';
+  }
+  if (!musicStarted) startMusic();
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+canvas.addEventListener('click', () => { if (!musicStarted) startMusic(); });
+
+// ============ DRAW HELPERS ============
+function drawText(text, x, y, color, size, bold) {
+  ctx.fillStyle = color;
+  ctx.font = `${bold ? 'bold ' : ''}${size}px 'Courier New', monospace`;
+  ctx.fillText(text, x - camera.x, y - camera.y);
+}
+
+// ============ DRAW BACKGROUND ============
+function drawBackground() {
+  // Dark terminal background
+  ctx.fillStyle = '#1a1a1a';
+  ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+  
+  // Subtle grid pattern
+  ctx.strokeStyle = '#1e1e1e';
+  ctx.lineWidth = 1;
+  for (let x = -camera.x % 50; x < SCREEN_W; x += 50) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, SCREEN_H); ctx.stroke();
+  }
+  for (let y = -camera.y % 50; y < SCREEN_H; y += 50) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(SCREEN_W, y); ctx.stroke();
+  }
+  
+  // Blue welcome boxes
+  const boxes = [
+    { x: 50, y: 65, w: 500, h: 170 },
+    { x: 50, y: 375, w: 500, h: 170 },
+  ];
+  boxes.forEach(b => {
+    const bx = b.x - camera.x, by = b.y - camera.y;
+    ctx.strokeStyle = '#3b82f6';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, b.w, b.h);
+  });
+  
+  // Tips boxes (right side)
+  const tipBoxes = [
+    { x: 510, y: 65, w: 280, h: 170 },
+    { x: 510, y: 375, w: 280, h: 170 },
+  ];
+  tipBoxes.forEach(b => {
+    const bx = b.x - camera.x, by = b.y - camera.y;
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, b.w, b.h);
+  });
+  
+  // Horizontal separator lines
+  [290, 330, 560, 610, 660, 720].forEach(ly => {
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, ly - camera.y);
+    ctx.lineTo(SCREEN_W, ly - camera.y);
+    ctx.stroke();
+  });
+  
+  // Blue line under user input
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(20 - camera.x, 645 - camera.y);
+  ctx.lineTo(780 - camera.x, 645 - camera.y);
+  ctx.stroke();
+  
+  // Orange line under "Create file"
+  ctx.strokeStyle = '#e87a3a';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(20 - camera.x, 715 - camera.y);
+  ctx.lineTo(780 - camera.x, 715 - camera.y);
+  ctx.stroke();
+  
+  // Draw all background text (non-edible gray text)
+  bgElements.forEach(e => {
+    if (e.color === '#888888' || e.color === '#666666' || e.color === '#aaaaaa' || e.color === '#abb2bf') {
+      if (e.bg) {
+        const tw = e.text.length * (e.size * 0.6);
+        ctx.fillStyle = e.bg;
+        ctx.fillRect(e.x - camera.x - 2, e.y - camera.y - e.size + 2, tw + 4, e.size + 4);
+      }
+      drawText(e.text, e.x, e.y, e.color, e.size, e.font === 'bold');
+    }
+  });
+}
+
+// ============ DRAW EDIBLES ============
+function drawEdibles(t) {
+  edibles.forEach(e => {
+    if (e.eaten) return;
+    let ey = e.y;
+    if (e.floating) {
+      ey += Math.sin(t * 0.03 + e.floatPhase) * 5;
+    }
+    // Glow effect
+    ctx.shadowColor = e.color;
+    ctx.shadowBlur = 8;
+    drawText(e.text, e.x, ey, e.color, e.size, e.font === 'bold');
+    ctx.shadowBlur = 0;
+    
+    // Store current y for collision
+    e._drawY = ey;
+  });
+}
+
+// ============ DRAW CLAUDE MASCOT ============
+function drawClaude(t) {
+  const sx = player.x - camera.x;
+  const sy = player.y - camera.y;
+  const s = 2; // pixel scale
+  
+  const o = '#e77e60', oL = '#f09070', oD = '#c06040';
+  
+  // Sprite data from pixel analysis: 16x9
+  const sprite = [
+    [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
+    [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
+    [0,0,1,1,2,1,1,1,1,1,1,2,1,1,0,0],
+    [0,0,1,1,2,1,1,1,1,1,1,2,1,1,0,0],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
+    [0,0,1,1,1,1,1,1,1,1,1,1,1,1,0,0],
+    [0,0,0,1,0,1,0,0,0,0,1,0,1,0,0,0],
+  ];
+  
+  // Walking animation: shift legs
+  const walkFrame = Math.floor(t * 0.15) % 4;
+  const legOffsets = [[0,0], [1,0], [0,1], [-1,0]];
+  const legOff = legOffsets[walkFrame];
+  
+  // Eating animation: open mouth
+  const isEating = player.eating > 0;
+  
+  // Draw sprite with scale
+  const sc = player.scale;
+  const drawX = sx - 16 * sc;
+  const drawY = sy - 9 * sc;
+  const ps = s * sc; // pixel size scaled
+  
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 16; col++) {
+      let val = sprite[row][col];
+      if (val === 0) continue;
+      
+      let ppx = drawX + col * ps;
+      let ppy = drawY + row * ps;
+      
+      // Leg animation
+      if (row === 8 && (keys['ArrowLeft']||keys['ArrowRight']||keys['ArrowUp']||keys['ArrowDown']||keys['a']||keys['d']||keys['w']||keys['s']||player.auto)) {
+        ppx += legOff[0] * sc;
+        ppy += legOff[1] * sc;
+      }
+      
+      if (val === 1) {
+        ctx.fillStyle = o;
+        // Shading
+        if (row === 0) ctx.fillStyle = oL;
+        if (col <= 2 && sprite[row][col-1] === 0) ctx.fillStyle = oD;
+        ctx.fillRect(ppx, ppy, ps, ps);
+      } else if (val === 2) {
+        // Eyes - blink
+        if (Math.sin(t * 0.04) > 0.95) {
+          ctx.fillStyle = o; // closed
+          ctx.fillRect(ppx, ppy, ps, ps);
+          ctx.fillStyle = '#000';
+          ctx.fillRect(ppx, ppy + ps - 1, ps, 1);
+        } else {
+          ctx.fillStyle = '#000';
+          ctx.fillRect(ppx, ppy, ps, ps);
+          // Eye shine
+          ctx.fillStyle = '#ffffff88';
+          ctx.fillRect(ppx, ppy, Math.ceil(sc), Math.ceil(sc));
+        }
+      }
+    }
+  }
+  
+  // Eating animation - open mouth
+  if (isEating) {
+    const mouthOpen = Math.sin(player.eating * 0.3) > 0;
+    if (mouthOpen) {
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(drawX + 6 * ps, drawY + 5 * ps, 4 * ps, 2 * ps);
+      // Tongue
+      ctx.fillStyle = '#e74c3c';
+      ctx.fillRect(drawX + 7 * ps, drawY + 6 * ps, 2 * ps, 1 * ps);
+    }
+  }
+  
+  // Burping animation
+  if (player.burping > 0) {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `${Math.floor(16 * sc)}px monospace`;
+    const burpText = player.burping > 15 ? '!' : '*burp*';
+    ctx.fillText(burpText, sx - 15 * sc, sy - 25 * sc - (20 - player.burping));
+  }
+  
+  // Size display
+  if (player.scale > 1.05) {
+    ctx.fillStyle = '#e77e6088';
+    ctx.font = '10px monospace';
+    ctx.fillText(`x${player.scale.toFixed(1)}`, sx + 18 * sc, sy - 10 * sc);
+  }
+  
+  // Shadow
+  ctx.fillStyle = '#00000033';
+  ctx.fillRect(drawX + 2, drawY + 9 * ps + 2, 12 * ps, Math.max(2, 2 * sc));
+}
+
+// ============ DRAW PARTICLES ============
+function drawParticles() {
+  particles.forEach(p => {
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.font = `${p.size}px monospace`;
+    ctx.fillText(p.char, p.x - camera.x, p.y - camera.y);
+  });
+  ctx.globalAlpha = 1;
+}
+
+// ============ UPDATE ============
+function update(t) {
+  // Player movement
+  let dx = 0, dy = 0;
+  
+  if (player.auto) {
+    // Auto mode: find nearest edible
+    if (!player.autoTarget || player.autoTarget.eaten) {
+      let nearest = null, nearDist = Infinity;
+      edibles.forEach(e => {
+        if (e.eaten) return;
+        const d = Math.hypot(e.x - player.x, e.y - player.y);
+        if (d < nearDist) { nearDist = d; nearest = e; }
+      });
+      player.autoTarget = nearest;
+    }
+    
+    if (player.autoTarget) {
+      const tx = player.autoTarget.x + player.autoTarget.width / 2;
+      const ty = player.autoTarget.y;
+      const adx = tx - player.x;
+      const ady = ty - player.y;
+      const dist = Math.hypot(adx, ady);
+      if (dist > 5) {
+        dx = (adx / dist) * player.speed;
+        dy = (ady / dist) * player.speed;
+      }
+    }
+  } else {
+    // Manual control
+    if (keys['ArrowLeft'] || keys['a']) { dx = -player.speed; player.dir = 1; }
+    if (keys['ArrowRight'] || keys['d']) { dx = player.speed; player.dir = 2; }
+    if (keys['ArrowUp'] || keys['w']) { dy = -player.speed; player.dir = 3; }
+    if (keys['ArrowDown'] || keys['s']) { dy = player.speed; player.dir = 0; }
+  }
+  
+  // Diagonal normalization
+  if (dx !== 0 && dy !== 0) {
+    dx *= 0.707;
+    dy *= 0.707;
+  }
+  
+  player.x = Math.max(20, Math.min(MAP_W - 20, player.x + dx));
+  player.y = Math.max(20, Math.min(MAP_H - 20, player.y + dy));
+  
+  // Collision with edibles (collision range grows with player)
+  const eatRange = 30 * player.scale;
+  edibles.forEach(e => {
+    if (e.eaten) return;
+    const ey = e._drawY || e.y;
+    const dist = Math.hypot((e.x + e.width/2) - player.x, ey - player.y);
+    if (dist < eatRange) {
+      e.eaten = true;
+      player.eating = 20;
+      player.eatCount++;
+      
+      // GROW! Every eat makes Claude slightly bigger (max 5x)
+      if (player.scale < 5.0) {
+        player.scale += 0.05;
+      }
+      
+      playEatSound();
+      
+      // Spawn burp particles
+      spawnBurpParticles(player.x, player.y, e.text, e.color);
+      
+      // Burp after every 3 eats
+      if (player.eatCount % 3 === 0) {
+        player.burping = 25;
+        playBurpSound();
+      }
+      
+      // Respawn floating edibles after a delay
+      if (e.respawn) {
+        setTimeout(() => {
+          e.eaten = false;
+          e.x = 50 + Math.random() * (MAP_W - 100);
+          e.y = 50 + Math.random() * (MAP_H - 100);
+        }, 3000 + Math.random() * 5000);
+      }
+    }
+  });
+  
+  // Update animations
+  if (player.eating > 0) player.eating--;
+  if (player.burping > 0) player.burping--;
+  
+  // Update particles
+  particles.forEach(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.03; // gravity
+    p.life--;
+  });
+  particles = particles.filter(p => p.life > 0);
+  
+  updateCamera();
+}
+
+// ============ DRAW HUD ============
+function drawHUD() {
+  // Eat counter
+  ctx.fillStyle = '#e87a3a';
+  ctx.font = 'bold 16px Courier New';
+  ctx.fillText(`🍽️ × ${player.eatCount}`, SCREEN_W - 120, 30);
+  
+  // Size indicator
+  ctx.fillStyle = '#7acad6';
+  ctx.font = 'bold 14px Courier New';
+  const sizePercent = Math.floor(player.scale * 100);
+  ctx.fillText(`📏 ${sizePercent}%`, SCREEN_W - 120, 52);
+  
+  // Size bar
+  ctx.fillStyle = '#333';
+  ctx.fillRect(SCREEN_W - 120, 58, 100, 6);
+  ctx.fillStyle = player.scale > 3 ? '#e74c3c' : player.scale > 2 ? '#e5c07b' : '#4ade80';
+  ctx.fillRect(SCREEN_W - 120, 58, Math.min(100, (player.scale / 5) * 100), 6);
+  
+  // Mini-map
+  const mmW = 120, mmH = 90;
+  const mmX = SCREEN_W - mmW - 10, mmY = SCREEN_H - mmH - 10;
+  ctx.fillStyle = '#00000088';
+  ctx.fillRect(mmX, mmY, mmW, mmH);
+  ctx.strokeStyle = '#333';
+  ctx.strokeRect(mmX, mmY, mmW, mmH);
+  
+  // Player dot on minimap
+  const pmx = mmX + (player.x / MAP_W) * mmW;
+  const pmy = mmY + (player.y / MAP_H) * mmH;
+  ctx.fillStyle = '#e77e60';
+  ctx.fillRect(pmx - 2, pmy - 2, 4, 4);
+  
+  // Edibles on minimap
+  edibles.forEach(e => {
+    if (e.eaten) return;
+    const ex = mmX + (e.x / MAP_W) * mmW;
+    const ey = mmY + (e.y / MAP_H) * mmH;
+    ctx.fillStyle = e.color + '88';
+    ctx.fillRect(ex, ey, 2, 2);
+  });
+  
+  // Camera viewport on minimap
+  ctx.strokeStyle = '#ffffff44';
+  ctx.strokeRect(
+    mmX + (camera.x / MAP_W) * mmW,
+    mmY + (camera.y / MAP_H) * mmH,
+    (SCREEN_W / MAP_W) * mmW,
+    (SCREEN_H / MAP_H) * mmH
+  );
+}
+
+// ============ MAIN LOOP ============
+let tick = 0;
+function gameLoop() {
+  tick++;
+  update(tick);
+  
+  drawBackground();
+  drawEdibles(tick);
+  drawClaude(tick);
+  drawParticles();
+  drawHUD();
+  
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
