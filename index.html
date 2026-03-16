@@ -10,12 +10,15 @@
   canvas{image-rendering:pixelated;image-rendering:crisp-edges;border:2px solid #333;cursor:none;}
   #ui{position:fixed;top:10px;left:50%;transform:translateX(-50%);color:#7acad6;font-family:'Courier New',monospace;font-size:14px;text-align:center;pointer-events:none;z-index:10;text-shadow:0 0 10px rgba(122,202,214,0.5);}
   #mode{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);color:#666;font-size:12px;font-family:monospace;pointer-events:none;z-index:10;}
+  #autoBtn{position:fixed;bottom:30px;right:20px;width:60px;height:60px;border-radius:50%;background:rgba(122,202,214,0.3);border:2px solid #7acad6;color:#7acad6;font-size:12px;font-family:monospace;z-index:20;display:none;touch-action:manipulation;}
+  @media (pointer:coarse){#autoBtn{display:block;}#ui{font-size:12px;}}
 </style>
 </head>
 <body>
 <div id="ui">WASD/方向键移动 · 空格切换自动/手动 · 小克吃代码！</div>
 <div id="mode">手动模式</div>
 <canvas id="c"></canvas>
+<button id="autoBtn" onclick="toggleAuto()">自动</button>
 <script>
 // ============ SETUP ============
 const canvas = document.getElementById('c');
@@ -404,6 +407,49 @@ document.addEventListener('keydown', e => {
 document.addEventListener('keyup', e => { keys[e.key] = false; });
 canvas.addEventListener('click', () => { if (!musicStarted) startMusic(); });
 
+// ============ TOUCH JOYSTICK ============
+let touchId = null, touchStartX = 0, touchStartY = 0, touchDx = 0, touchDy = 0;
+const DEAD_ZONE = 15;
+
+function toggleAuto() {
+  player.auto = !player.auto;
+  modeEl.textContent = player.auto ? '自动模式' : '手动模式';
+  document.getElementById('autoBtn').textContent = player.auto ? '手动' : '自动';
+  if (!musicStarted) startMusic();
+}
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (!musicStarted) startMusic();
+  if (touchId !== null) return;
+  const t = e.changedTouches[0];
+  touchId = t.identifier;
+  touchStartX = t.clientX;
+  touchStartY = t.clientY;
+  touchDx = 0; touchDy = 0;
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (t.identifier === touchId) {
+      touchDx = t.clientX - touchStartX;
+      touchDy = t.clientY - touchStartY;
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend', e => {
+  for (const t of e.changedTouches) {
+    if (t.identifier === touchId) {
+      touchId = null; touchDx = 0; touchDy = 0;
+    }
+  }
+});
+canvas.addEventListener('touchcancel', e => {
+  touchId = null; touchDx = 0; touchDy = 0;
+});
+
 // ============ DRAW HELPERS ============
 function drawText(text, x, y, color, size, bold) {
   ctx.fillStyle = color;
@@ -655,11 +701,19 @@ function update(t) {
       }
     }
   } else {
-    // Manual control
+    // Manual control - keyboard
     if (keys['ArrowLeft'] || keys['a']) { dx = -player.speed; player.dir = 1; }
     if (keys['ArrowRight'] || keys['d']) { dx = player.speed; player.dir = 2; }
     if (keys['ArrowUp'] || keys['w']) { dy = -player.speed; player.dir = 3; }
     if (keys['ArrowDown'] || keys['s']) { dy = player.speed; player.dir = 0; }
+    // Touch joystick
+    if (touchId !== null) {
+      const dist = Math.hypot(touchDx, touchDy);
+      if (dist > DEAD_ZONE) {
+        dx = (touchDx / dist) * player.speed;
+        dy = (touchDy / dist) * player.speed;
+      }
+    }
   }
   
   // Diagonal normalization
@@ -789,6 +843,24 @@ function gameLoop() {
   drawParticles();
   drawHUD();
   
+  // Draw touch joystick indicator
+  if (touchId !== null) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = SCREEN_W / rect.width;
+    const scaleY = SCREEN_H / rect.height;
+    const cx = (touchStartX - rect.left) * scaleX;
+    const cy = (touchStartY - rect.top) * scaleY;
+    const jx = Math.max(-40, Math.min(40, touchDx * scaleX));
+    const jy = Math.max(-40, Math.min(40, touchDy * scaleY));
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = '#7acad6';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, 45, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#7acad6';
+    ctx.beginPath(); ctx.arc(cx + jx, cy + jy, 18, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
   requestAnimationFrame(gameLoop);
 }
 
